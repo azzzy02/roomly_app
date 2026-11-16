@@ -2,14 +2,26 @@
 
 Roomly is a real-time multiplayer messaging web application built with React, TypeScript, Vite, Tailwind CSS, Firebase Authentication (Google Sign-In), Cloud Firestore, and Firebase Cloud Functions.
 
-## Architecture & Data Model
+## Features
 
-- `/usernames/{normalizedUsername}` — Globally unique case-insensitive username reservations (`uid`, `username`, `normalizedUsername`, `createdAt`), claimed and swapped atomically inside Firestore transactions.
-- `/users/{uid}` — Owner-isolated user profiles (`uid`, `displayName`, `username`, `email`, `photoURL`, `createdAt`, `updatedAt`). Emails are strictly isolated to the account owner and masked in account settings.
-- `/users/{uid}/recentRooms/{roomId}` — User-scoped persistent room history decoupled from active room membership (`roomId`, `roomName`, `ownerUid`, `ownerUsername`, `role`, `lastVisitedAt`, `lastReadAt`, `createdAt`). Leaving a room, navigating home, or signing out never deletes this history.
-- `/rooms/{roomId}` — Chat rooms keyed by deterministic SHA-256 hash of the normalized room name (`roomId`, `name`, `normalizedName`, `createdBy`, `createdByUsername`, `createdByDisplayName`, `createdAt`, `status`). Direct client deletion is denied.
-- `/rooms/{roomId}/members/{uid}` — Active room participation records (`uid`, `roomId`, `displayName`, `username`, `photoURL`, `role`, `joinedAt`, `lastMessageAt`). Roles are strictly validated against `rooms/{roomId}.createdBy` in Firestore Security Rules.
-- `/rooms/{roomId}/messages/{messageId}` — Immutable room messages (`messageId`, `roomId`, `senderId`, `senderName`, `senderUsername`, `senderPhotoURL`, `text`, `createdAt`) ordered by `serverTimestamp()`.
+- Google sign-in with unique, case-insensitive usernames
+- Rooms are created or joined by name; the same name always maps to the same room
+- Live messaging through Firestore listeners
+- Recent rooms list that survives leaving a room or signing out
+- Only the room creator can delete a room, enforced server-side
+
+## Data model
+
+| Path | Purpose |
+| --- | --- |
+| `usernames/{normalizedUsername}` | Username reservation, claimed and swapped in a transaction |
+| `users/{uid}` | Profile. Readable only by its owner |
+| `users/{uid}/recentRooms/{roomId}` | Per-user room history, independent of membership |
+| `rooms/{roomId}` | Room, keyed by the SHA-256 hash of its normalized name. Clients cannot delete it |
+| `rooms/{roomId}/members/{uid}` | Active participants and their role |
+| `rooms/{roomId}/messages/{messageId}` | Messages, ordered by server timestamp and immutable once sent |
+
+Access rules live in `firestore.rules`. Roles are checked against `rooms/{roomId}.createdBy`.
 
 ## Running Locally
 
