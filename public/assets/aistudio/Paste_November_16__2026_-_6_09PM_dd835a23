@@ -1,0 +1,730 @@
+
+{
+  "task": {
+    "type": "Repair, Refactor and Enhance Existing Application",
+    "project": "Roomly",
+    "mode": "Modify Existing Codebase",
+    "priority": "Critical",
+    "instruction": "Inspect the existing project, identify the actual causes of its bugs, and implement the fixes. Do not recreate the application from scratch. Preserve existing working features, user accounts, rooms, and message history.",
+    "primary_goal": "Turn Roomly into a reliable, polished, Discord-inspired multiplayer chat application with proper room ownership, persistent user history, unique identities, secure room administration, and dependable real-time behavior.",
+    "important": "Do not merely explain the changes or return code snippets. Modify the actual project files, integrate the backend changes, and verify the application."
+  },
+
+  "existing_technology_stack": {
+    "frontend": "React",
+    "language": "TypeScript",
+    "database": "Firebase Cloud Firestore",
+    "authentication": "Firebase Authentication",
+    "realtime": "Firestore onSnapshot",
+    "styling": "Tailwind CSS",
+    "icons": "Lucide React",
+    "instruction": "Inspect the existing dependencies and Firebase configuration before changing anything. Keep the existing technology stack unless a specific limitation requires a change."
+  },
+
+  "phase_1_audit_existing_application": {
+    "objective": "Understand the existing implementation before changing it.",
+    "required_investigation": [
+      "Inspect the complete React component structure.",
+      "Inspect authentication and session persistence.",
+      "Inspect the Firestore collection and subcollection structure.",
+      "Inspect how rooms are created and identified.",
+      "Inspect how room membership is created and deleted.",
+      "Inspect how recent rooms are saved and retrieved.",
+      "Inspect the room deletion implementation.",
+      "Inspect Firestore security rules.",
+      "Inspect message subscriptions and listener cleanup.",
+      "Inspect how notifications and errors are generated.",
+      "Identify existing race conditions and duplicate requests.",
+      "Identify all locations where room membership and recent room history are incorrectly treated as the same thing."
+    ],
+    "non_negotiable": [
+      "Do not assume the current Firestore schema matches a proposed schema.",
+      "Do not replace existing collections without understanding their purpose.",
+      "Do not delete or reset existing user or message data.",
+      "Do not fix errors by weakening security rules.",
+      "Do not hide errors without fixing their underlying causes.",
+      "Do not introduce a second Firebase initialization.",
+      "Do not leave old and new room-management implementations running simultaneously."
+    ]
+  },
+
+  "phase_2_fix_critical_recent_rooms_bugs": {
+    "severity": "Critical",
+    "observed_problems": [
+      "After leaving a room, duplicate Left notifications appear.",
+      "After leaving a room, the recent rooms section displays Unable to load recent rooms.",
+      "A permission-denied error appears even though the user has a valid recent room record.",
+      "Navigating back to the home screen causes room history retrieval problems.",
+      "After logout and login, previously created or visited rooms disappear from the account's history."
+    ],
+    "root_problem_to_solve": "Room membership, room existence, and user-specific recent room history are separate concepts. Do not use membership as the condition for retrieving a user's recent room history.",
+
+    "required_data_model": {
+      "user_recent_rooms": {
+        "path": "users/{uid}/recentRooms/{roomId}",
+        "purpose": "Persist a user's personal room history independently of current membership.",
+        "fields": [
+          "roomId",
+          "roomName",
+          "ownerUid",
+          "ownerUsername",
+          "role",
+          "lastVisitedAt",
+          "lastReadAt",
+          "createdAt"
+        ],
+        "rules": [
+          "Only the authenticated owner of the user document can read their recent room records.",
+          "Only the authenticated owner can manage their recent room records, subject to valid room data.",
+          "Recent room records must not require the user to be an active room member.",
+          "Leaving a room must not delete this document.",
+          "Logging out must never delete this document.",
+          "Navigating to home must never delete this document."
+        ]
+      },
+      "room_membership": {
+        "path": "rooms/{roomId}/members/{uid}",
+        "purpose": "Represent the user's current participation in a room.",
+        "rules": [
+          "Joining creates or restores membership.",
+          "Explicitly leaving removes membership.",
+          "Navigating to the home screen does not remove membership.",
+          "Membership deletion must not delete the user's recent room record.",
+          "Membership must not determine whether a recent room appears on the home screen."
+        ]
+      }
+    },
+
+    "required_behavior": [
+      "Save a recent room record whenever a user successfully creates or joins a room.",
+      "Update lastVisitedAt whenever the user successfully opens the room.",
+      "Retrieve recent rooms using the authenticated user's UID.",
+      "Load recent rooms only after Firebase authentication has finished resolving.",
+      "Do not fetch private membership data just to render the recent rooms list.",
+      "Do not require active membership just to display a recent room.",
+      "Preserve room history across page refreshes.",
+      "Preserve room history across logout and subsequent login.",
+      "Preserve room history when a user explicitly leaves.",
+      "Allow previously visited rooms to be rejoined from the home screen.",
+      "Show the room owner and the user's role in each recent room entry.",
+      "Handle deleted rooms as stale history entries without crashing the entire recent rooms list."
+    ],
+
+    "navigation_behavior": {
+      "go_home": "Navigate to the home screen, unsubscribe from the active conversation, and preserve membership and recent history.",
+      "leave_room": "Remove the user's membership, unsubscribe from the conversation, navigate home, and preserve their recent history.",
+      "rejoin_room": "Check that the room still exists, restore the user's membership, update recent history, and open the conversation.",
+      "logout": "Clear in-memory session state and listeners only. Never delete persistent user history."
+    },
+
+    "error_handling": [
+      "A normal leave operation must never generate a recent rooms permission error.",
+      "A user with no recent rooms should see a proper empty state.",
+      "One invalid recent room record should not prevent other rooms from loading.",
+      "Use Promise.allSettled or equivalent isolated loading where multiple room checks are necessary.",
+      "Handle a genuinely deleted room gracefully.",
+      "Do not classify an ordinary membership change as an application failure.",
+      "Log real permission failures with enough detail to identify the failing document path."
+    ]
+  },
+
+  "phase_3_room_ownership_and_administration": {
+    "severity": "Critical",
+    "objective": "Implement actual room ownership and secure administrative permissions.",
+
+    "ownership_model": {
+      "roles": [
+        {
+          "role": "owner",
+          "description": "The user who originally created the room.",
+          "permissions": [
+            "Join and leave the room.",
+            "Send messages.",
+            "See the member list.",
+            "See room creation information.",
+            "Manage room settings.",
+            "Permanently delete the entire room."
+          ]
+        },
+        {
+          "role": "member",
+          "description": "An invited or subsequently joined user.",
+          "permissions": [
+            "Join and leave the room.",
+            "Send messages.",
+            "Read room messages.",
+            "See room creation information.",
+            "See the member list.",
+            "Remove the room from their own recent rooms."
+          ],
+          "restricted_permissions": [
+            "Cannot delete the room.",
+            "Cannot change the room owner.",
+            "Cannot assign themselves the owner role.",
+            "Cannot delete other members' accounts or room data."
+          ]
+        }
+      ],
+      "source_of_truth": "The immutable createdBy UID in the room document.",
+      "authorization": "Determine ownership using room.createdBy === authenticatedUser.uid. Never trust a client-supplied role or isAdmin boolean."
+    },
+
+    "room_document": {
+      "required_fields": [
+        "roomId",
+        "name",
+        "normalizedName",
+        "createdBy",
+        "createdByUsername",
+        "createdByDisplayName",
+        "createdAt",
+        "status"
+      ],
+      "rules": [
+        "createdBy must be set when the room is created.",
+        "createdBy must never change through ordinary client updates.",
+        "The owner identity must survive leaving and rejoining.",
+        "The owner must remain the owner regardless of membership changes.",
+        "A user's display name changes must not silently transfer ownership."
+      ]
+    },
+
+    "room_deletion": {
+      "current_problem": "The existing delete button appears in recent rooms but does not actually delete the room.",
+      "required_behavior": [
+        "Make the Delete Room action permanently delete the actual room, not just hide its recent room entry.",
+        "Show Delete Room only to the original room creator.",
+        "Hide or disable the delete action for ordinary members.",
+        "Provide a separate Remove from Recent option for ordinary members.",
+        "Show a confirmation dialog before permanent deletion.",
+        "Clearly state that deletion removes the room and its messages for everyone.",
+        "After successful deletion, navigate the owner to the home screen.",
+        "Remove stale references from every user's recent room history.",
+        "Notify connected participants that the owner deleted the room.",
+        "Do not leave orphaned messages or member documents."
+      ],
+
+      "backend_implementation": {
+        "preferred": "Firebase Cloud Function using the Admin SDK.",
+        "callable_function": "deleteRoom",
+        "workflow": [
+          "Require an authenticated caller.",
+          "Receive the target room ID.",
+          "Fetch the authoritative room document.",
+          "Verify that room.createdBy matches the authenticated user's UID.",
+          "Reject the request if the caller is not the original creator.",
+          "Mark the room as deleting to prevent new writes.",
+          "Delete all message documents.",
+          "Delete all membership documents.",
+          "Delete the room document and nested collections.",
+          "Find and delete all matching recentRooms references using an Admin SDK collection-group query.",
+          "Return a successful result only after the deletion workflow completes."
+        ],
+        "reliability": [
+          "Make deletion idempotent.",
+          "Use batched deletion for large collections.",
+          "Handle partial failures and allow safe retries by the owner.",
+          "Do not expose Firebase Admin SDK credentials to the frontend.",
+          "Never allow members to bypass ownership checks by calling the function directly."
+        ],
+        "fallback": "If Cloud Functions deployment is unavailable, clearly explain the required Firebase setup. Do not substitute an insecure client-side cascading delete."
+      },
+
+      "firestore_security": [
+        "Deny direct client deletion of room documents.",
+        "Deny direct client deletion of another member's data.",
+        "Only the trusted backend function can execute permanent room deletion.",
+        "Validate ownership using the authoritative room document.",
+        "Do not treat hiding the delete button as sufficient authorization."
+      ]
+    }
+  },
+
+  "phase_4_room_creator_attribution": {
+    "severity": "High",
+    "objective": "Make it immediately clear who created each room.",
+
+    "home_screen": [
+      "Display a small creator symbol beside rooms created by the current user.",
+      "Display Created by you for rooms owned by the current account.",
+      "For other rooms, display Created by @username.",
+      "Show the owner identity in the recent rooms details.",
+      "Keep the indicator subtle and consistent with the existing design."
+    ],
+
+    "chat_screen": {
+      "header": [
+        "Show the room name.",
+        "Show the number of current members.",
+        "Show the owner identity or a small owner badge.",
+        "Provide a room information action."
+      ],
+      "conversation_start": {
+        "type": "System information entry",
+        "position": "At the very beginning of the conversation, before regular messages.",
+        "content": "Room created by @username",
+        "additional_information": [
+          "Display the room creation date.",
+          "Use a small creator icon or owner label.",
+          "Keep this entry visually different from ordinary user messages.",
+          "Make it persistent across refreshes.",
+          "Derive it from immutable room metadata.",
+          "Do not create a duplicate room-created message each time a user joins."
+        ]
+      }
+    },
+
+    "member_list": [
+      "Show the room creator first or clearly distinguish their role.",
+      "Display a small crown or shield icon beside the owner.",
+      "Display an Owner role label.",
+      "Display a Member label for other users.",
+      "Use the same ownership information in the room header and member list."
+    ]
+  },
+
+  "phase_5_unique_usernames_and_privacy": {
+    "severity": "High",
+    "objective": "Prevent identity confusion and protect user email addresses.",
+
+    "decision": "Implement globally unique usernames. Do not use full email addresses as public identities.",
+
+    "username_requirements": {
+      "minimum_length": 3,
+      "maximum_length": 20,
+      "allowed_characters": "Letters, numbers, underscores, periods, and hyphens.",
+      "normalization": "Trim whitespace and compare usernames case-insensitively.",
+      "examples": [
+        "ayushman",
+        "ayush_dev",
+        "ayushman24",
+        "ayush.backend"
+      ],
+      "rules": [
+        "Every account must have one unique username.",
+        "No two accounts may claim the same normalized username.",
+        "Username availability must be checked against Firestore.",
+        "Username reservation must use a transaction to handle simultaneous claims.",
+        "Do not rely on frontend availability checks alone.",
+        "Do not automatically assign duplicate usernames based only on Google display names.",
+        "Allow the user to choose another username if their preferred one is taken.",
+        "If usernames are editable, reserve the new username before releasing the previous one.",
+        "Prevent users from impersonating other users."
+      ]
+    },
+
+    "firestore_structure": {
+      "collection": "usernames",
+      "document_id": "Normalized unique username",
+      "fields": [
+        "uid",
+        "username",
+        "createdAt"
+      ],
+      "profile_reference": "users/{uid}",
+      "profile_fields": [
+        "uid",
+        "displayName",
+        "username",
+        "photoURL",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+
+    "username_ui": [
+      "Ask existing users to choose a username if they do not already have one.",
+      "Show a username availability indicator.",
+      "Show an error if a username is already taken.",
+      "Display @username beside names in messages.",
+      "Display @username in the member panel.",
+      "Display the username of the room creator.",
+      "Allow editing through account settings with uniqueness verification."
+    ],
+
+    "email_privacy": [
+      "Never display complete email addresses in public chat interfaces.",
+      "Restrict email access to the account owner.",
+      "Do not expose private email addresses in publicly readable profile documents.",
+      "Use display names and unique usernames for user identification.",
+      "If an email is ever shown for a legitimate account-management reason, mask it before rendering."
+    ]
+  },
+
+  "phase_6_discord_inspired_features": {
+    "objective": "Give Roomly a more complete communication experience inspired by Discord without unnecessarily recreating its complex infrastructure.",
+    "instruction": "Implement only practical, reliable features. Do not prioritize optional features over fixing existing bugs.",
+
+    "features": {
+      "room_navigation": [
+        "Display recently visited rooms in a consistent left sidebar.",
+        "Highlight the currently selected room.",
+        "Provide a quick create or join action.",
+        "Allow easy switching between rooms.",
+        "Show a small unread-message count if it can be implemented using reliable per-user read state."
+      ],
+
+      "room_header": [
+        "Show room name.",
+        "Show member count.",
+        "Show room creator.",
+        "Provide a copy invitation link action.",
+        "Provide a room information menu.",
+        "Show room ownership actions only to the owner."
+      ],
+
+      "members_panel": [
+        "Add a collapsible member list on the right side of the conversation.",
+        "Show each member's avatar or initials.",
+        "Show display name and @username.",
+        "Identify the owner using a small role badge.",
+        "Identify ordinary members separately.",
+        "Show the actual member count.",
+        "Load members from Firestore rather than hardcoding them."
+      ],
+
+      "conversation_improvements": [
+        "Keep chronological message ordering.",
+        "Show message timestamps.",
+        "Group consecutive messages from the same sender.",
+        "Show username and avatar.",
+        "Separate messages by date.",
+        "Show a room-created system information entry.",
+        "Provide a new-message indicator when the user is reading older messages.",
+        "Maintain the current message history pagination."
+      ],
+
+      "user_experience": [
+        "Profile menu.",
+        "Username editing.",
+        "Room invitation link copying.",
+        "Room-specific settings.",
+        "Owner-only delete option.",
+        "Member-specific leave option.",
+        "Remove from recent history option.",
+        "Useful confirmation dialogs."
+      ]
+    },
+
+    "features_not_required_now": [
+      "Voice and video calls.",
+      "Complex server permission hierarchies.",
+      "Bots and integrations.",
+      "Custom server roles.",
+      "Advanced moderation systems.",
+      "Screen sharing.",
+      "Complex typing-presence infrastructure.",
+      "Elaborate activity feeds.",
+      "Full Discord-level notification infrastructure."
+    ],
+
+    "important": "Do not add fake online indicators. Only show online status if it is supported by actual, reliable presence tracking. A simple accurate member list is better than fabricated presence information."
+  },
+
+  "phase_7_fix_notifications_and_state_management": {
+    "severity": "High",
+    "observed_problem": "The screenshot shows two identical Left #test-1 notifications followed by Unable to load recent rooms.",
+
+    "requirements": [
+      "Investigate why leave operations are being executed more than once.",
+      "Check duplicated React effects and event handlers.",
+      "Check React StrictMode development behavior.",
+      "Check navigation-triggered callbacks.",
+      "Check whether both the leave function and a state-change effect generate the same success toast.",
+      "Prevent repeated submissions while an operation is pending.",
+      "Make leave operations idempotent.",
+      "Ensure only one success notification is generated for one user action.",
+      "Ensure notifications are not generated by ordinary state synchronization.",
+      "Use stable notification IDs or deduplication keys.",
+      "Ensure cleanup logic does not generate user-facing success notifications."
+    ],
+
+    "expected_leave_flow": [
+      "User selects Leave Room.",
+      "Disable the action while the request is pending.",
+      "Unsubscribe from active message listeners.",
+      "Remove the authenticated user's membership document.",
+      "Preserve their recent room record.",
+      "Navigate to the home screen.",
+      "Refresh the current user's recent room list.",
+      "Display one success notification.",
+      "Do not display a permission error."
+    ],
+
+    "notification_examples": {
+      "leave_success": "Left #room-name",
+      "room_deleted": "Room deleted successfully",
+      "room_rejoined": "Joined #room-name",
+      "room_created": "Room created successfully",
+      "username_taken": "This username is already taken",
+      "permission_denied": "You do not have permission to perform this action"
+    }
+  },
+
+  "phase_8_security_and_data_migration": {
+    "objective": "Make the changes compatible with existing user accounts and room data.",
+    
+    "migration_requirements": [
+      "Inspect the actual existing Firestore schema.",
+      "Create an idempotent migration strategy.",
+      "Preserve all existing users.",
+      "Preserve existing room IDs.",
+      "Preserve existing messages and timestamps.",
+      "Preserve any available room creator information.",
+      "Backfill recent room records for existing users where historical information is available.",
+      "Backfill usernames without creating duplicates.",
+      "Create username reservation documents.",
+      "Preserve existing membership records.",
+      "Avoid assigning room ownership to the current user merely because the migration is being run by that user.",
+      "Do not infer ownership from an arbitrary member.",
+      "If an existing room has no reliably identifiable owner, mark it as a legacy room with unknown ownership and do not allow arbitrary users to delete it."
+    ],
+
+    "security_rules": [
+      "Require authentication for protected functionality.",
+      "Restrict users/recentRooms access to the owning UID.",
+      "Restrict membership creation and deletion to the authenticated UID.",
+      "Verify room membership before message reads and writes.",
+      "Keep room creator information immutable.",
+      "Restrict username reservation to valid authenticated claims.",
+      "Ensure username reservation and profile ownership agree.",
+      "Validate sender UID against request.auth.uid.",
+      "Restrict user profile changes to the account owner.",
+      "Prevent users from changing their own role to owner.",
+      "Prevent ordinary members from updating room ownership metadata.",
+      "Deny unauthorized room deletion.",
+      "Use default-deny access rules."
+    ]
+  },
+
+  "phase_9_visual_and_interaction_quality": {
+    "objective": "Make the repaired application feel like a coherent, mature messaging product.",
+
+    "design_direction": "Retain the existing dark Roomly interface from the current application. Refine it rather than replacing the product with an unrelated design.",
+
+    "visual_requirements": [
+      "Preserve the existing dark neutral foundation.",
+      "Use the current purple accent sparingly for primary actions and selected states.",
+      "Avoid purple-blue gradients and glowing shadows.",
+      "Avoid decorative blurred blobs and neon borders.",
+      "Use consistent spacing and component dimensions.",
+      "Use Lucide icons consistently.",
+      "Use a modest owner badge rather than a large decorative label.",
+      "Keep the member panel and conversation visually balanced.",
+      "Use subtle surface changes instead of excessive animation.",
+      "Keep navigation readable.",
+      "Use sentence case for labels.",
+      "Avoid generic Welcome back headlines.",
+      "Avoid unnecessary statistics and decorative cards.",
+      "Avoid fake members, fake unread counts, and fake online users.",
+      "Use practical empty states and clear confirmation dialogs."
+    ],
+
+    "home_screen": [
+      "Show the current user's username and profile.",
+      "Show the room creation/join section.",
+      "Show persistent recent rooms.",
+      "Distinguish rooms owned by the user from rooms owned by others.",
+      "Show role information.",
+      "Show appropriate actions based on ownership.",
+      "Do not display error toasts for a successful room departure."
+    ],
+
+    "chat_layout": {
+      "left": "Recent room navigation.",
+      "center": "Main conversation and composer.",
+      "right": "Collapsible members and room information panel.",
+      "mobile": "Use collapsible navigation and member panels instead of squeezing three columns onto a small screen."
+    }
+  },
+
+  "phase_10_testing": {
+    "mandatory": true,
+    "instruction": "Do not declare completion until the critical tests have actually been executed.",
+
+    "test_scenario_1": {
+      "name": "Room ownership",
+      "steps": [
+        "User A creates a room.",
+        "User B joins the room using the room name.",
+        "Verify User A is shown as Owner.",
+        "Verify User B is shown as Member.",
+        "Verify User A sees Delete Room.",
+        "Verify User B cannot see or execute Delete Room."
+      ],
+      "expected": "Only the original creator can delete the room."
+    },
+
+    "test_scenario_2": {
+      "name": "Recent rooms after leaving",
+      "steps": [
+        "User A joins a room.",
+        "User A sends and receives messages.",
+        "User A selects Leave Room.",
+        "User A returns to the home screen.",
+        "Load recent rooms.",
+        "Refresh the browser."
+      ],
+      "expected": "The room still appears in recent rooms. No permission-denied notification appears. The user can rejoin."
+    },
+
+    "test_scenario_3": {
+      "name": "Recent rooms after logout",
+      "steps": [
+        "User A creates two rooms.",
+        "User A visits and leaves one room.",
+        "User A logs out.",
+        "User A logs back in with the same Google account.",
+        "Load recent rooms."
+      ],
+      "expected": "Both previously recorded rooms appear with their original ownership information."
+    },
+
+    "test_scenario_4": {
+      "name": "Permanent room deletion",
+      "steps": [
+        "User A creates a room.",
+        "User B joins the room.",
+        "User A leaves the room.",
+        "User A returns to recent rooms.",
+        "User A selects Delete Room.",
+        "Confirm deletion.",
+        "Check the room document, nested messages, memberships, and recent room references."
+      ],
+      "expected": "The room is permanently deleted for everyone, including its nested data and all recent room references. User B can no longer access it."
+    },
+
+    "test_scenario_5": {
+      "name": "Unauthorized room deletion",
+      "steps": [
+        "User A creates a room.",
+        "User B joins the room.",
+        "User B attempts to delete the room through the UI.",
+        "User B attempts to invoke the backend deletion function directly."
+      ],
+      "expected": "Both attempts are rejected. The room and its messages remain intact."
+    },
+
+    "test_scenario_6": {
+      "name": "Unique usernames",
+      "steps": [
+        "User A selects the username ayushman.",
+        "User B attempts to select ayushman.",
+        "User B attempts to select Ayushman.",
+        "User B selects ayush_dev."
+      ],
+      "expected": "Both ayushman and Ayushman are treated as the same username. User B receives an availability error and can claim ayush_dev."
+    },
+
+    "test_scenario_7": {
+      "name": "Creator attribution",
+      "steps": [
+        "User A creates a room.",
+        "User B joins the room.",
+        "Both open the conversation.",
+        "Both open the member panel."
+      ],
+      "expected": "Both users see the same original creator information. User A has an Owner badge and User B has a Member label. The room-created system entry appears only once at the beginning."
+    },
+
+    "test_scenario_8": {
+      "name": "Navigation and duplicate notifications",
+      "steps": [
+        "User A joins a room.",
+        "User A navigates to the home screen without leaving.",
+        "User A returns to the room.",
+        "User A explicitly leaves.",
+        "Observe notifications and recent room loading.",
+        "Repeat with page refresh and multiple browser tabs."
+      ],
+      "expected": "Navigation does not remove membership. Explicit leaving removes membership but preserves room history. Exactly one leave notification appears."
+    },
+
+    "test_scenario_9": {
+      "name": "Real-time membership and deletion",
+      "steps": [
+        "Open a room in two independent browser sessions.",
+        "Display the member list in both sessions.",
+        "Join using a third account.",
+        "Verify member count updates.",
+        "Have the owner delete the room."
+      ],
+      "expected": "Membership updates are synchronized. All participants are redirected gracefully when the room is deleted."
+    }
+  },
+
+  "phase_11_implementation_order": [
+    {
+      "step": 1,
+      "name": "Audit and reproduce",
+      "action": "Inspect the actual source code and reproduce the recent room error and duplicate notifications."
+    },
+    {
+      "step": 2,
+      "name": "Fix persistent room history",
+      "action": "Decouple recent rooms from membership and implement user-scoped persistent Firestore records."
+    },
+    {
+      "step": 3,
+      "name": "Fix navigation and notifications",
+      "action": "Correct the leave and home navigation lifecycle, listener cleanup, and duplicate toast handling."
+    },
+    {
+      "step": 4,
+      "name": "Implement ownership",
+      "action": "Add immutable creator identity and secure owner/member permissions."
+    },
+    {
+      "step": 5,
+      "name": "Fix permanent deletion",
+      "action": "Implement the secure server-side delete workflow and cascade cleanup."
+    },
+    {
+      "step": 6,
+      "name": "Implement unique usernames",
+      "action": "Create username reservation and migration logic."
+    },
+    {
+      "step": 7,
+      "name": "Implement attribution",
+      "action": "Display room creator information in recent rooms, room header, member list, and conversation start."
+    },
+    {
+      "step": 8,
+      "name": "Add Discord-inspired improvements",
+      "action": "Implement practical room navigation, member panel, role badges, and room information."
+    },
+    {
+      "step": 9,
+      "name": "Migrate and secure existing data",
+      "action": "Backfill existing data without resetting or deleting user content. Deploy and verify Firestore security rules."
+    },
+    {
+      "step": 10,
+      "name": "End-to-end verification",
+      "action": "Run the multi-user scenarios and fix all identified regressions."
+    }
+  ],
+
+  "final_instructions": {
+    "implementation": "Make the changes directly in the existing project.",
+    "preservation": "Preserve working authentication, realtime messaging, timestamps, and existing message history.",
+    "backend_first": "Fix Firestore data relationships, authorization, and persistence before polishing the UI.",
+    "security": "Every permission restriction must be enforced on the backend, not merely through hidden frontend buttons.",
+    "testing": "Use separate browser sessions and accounts for multiplayer testing.",
+    "no_fake_features": "Do not create visual-only implementations of membership, deletion, usernames, or notifications.",
+    "no_fake_success": "Do not show a success notification until the underlying operation succeeds.",
+    "no_data_loss": "Never wipe existing databases or replace existing user data during migration.",
+    "completion_report": [
+      "List the original bugs identified.",
+      "Explain their actual root causes.",
+      "List the files modified.",
+      "Describe any Firestore schema changes.",
+      "Describe the security rules changed.",
+      "Describe any required Cloud Functions and deployment steps.",
+      "Report the tests actually executed.",
+      "Clearly identify anything that still requires manual Firebase configuration."
+    ],
+    "definition_of_done": "Roomly must support reliable room creation, joining, leaving, returning, permanent owner-only deletion, persistent account-specific room history, unique identities, accurate creator attribution, and secure real-time messaging without the permission and duplicate notification problems described above."
+  }
+}
